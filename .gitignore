@@ -1,4 +1,5 @@
 api.key
 /stuff
 *.swp
+*.tar.gz
 src/main/tags
