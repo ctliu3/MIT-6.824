@@ -61,9 +61,10 @@ type MapReduce struct {
   stats *list.List
 
   // Map of registered workers that you need to keep up to date
-  Workers map[string]*WorkerInfo 
+  Workers map[string]*WorkerInfo
 
   // add any additional state here
+  idleChannel chan string
 }
 
 func InitMapReduce(nmap int, nreduce int,
@@ -78,6 +79,7 @@ func InitMapReduce(nmap int, nreduce int,
   mr.DoneChannel = make(chan bool)
 
   // initialize any additional state here
+  mr.idleChannel = make(chan string)
   return mr
 }
 
