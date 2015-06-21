@@ -15,8 +15,11 @@ type ViewServer struct {
   dead bool
   me string
 
-
   // Your declarations here.
+  lastPingTime map[string]time.Time
+  ack map[string]uint
+  current View
+  next View
 }
 
 //
@@ -25,16 +28,49 @@ type ViewServer struct {
 func (vs *ViewServer) Ping(args *PingArgs, reply *PingReply) error {
 
   // Your code here.
+  vs.mu.Lock()
+
+  from := args.Me
+  vs.lastPingTime[from] = time.Now()
+
+  if vs.ack[from] < args.Viewnum {
+    vs.ack[from] = args.Viewnum
+  }
+
+  if vs.current.Primary == from && args.Viewnum == 0 {
+    vs.next.Primary = vs.current.Backup
+    vs.next.Backup = ""
+    vs.next.Viewnum = vs.current.Viewnum + 1
+  }
+
+  if vs.current.Primary == "" {
+    vs.next.Primary = from
+    vs.next.Viewnum = vs.current.Viewnum + 1
+  } else if vs.current.Primary != from && vs.current.Backup == "" {
+    vs.next.Primary = vs.current.Primary
+    vs.next.Backup = from
+    vs.next.Viewnum = vs.current.Viewnum + 1
+  }
+
+  if vs.ack[vs.current.Primary] == vs.current.Viewnum {
+    vs.current = vs.next
+  }
+
+  reply.View = vs.current
+
+  vs.mu.Unlock()
 
   return nil
 }
 
-// 
+//
 // server Get() RPC handler.
 //
 func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 
   // Your code here.
+
+  reply.View = vs.current
 
   return nil
 }
@@ -48,6 +84,34 @@ func (vs *ViewServer) Get(args *GetArgs, reply *GetReply) error {
 func (vs *ViewServer) tick() {
 
   // Your code here.
+
+  deadInterval := DeadPings * PingInterval
+  var flag bool = false
+
+  if vs.current.Primary != "" {
+    pInterval := time.Now().Sub(vs.lastPingTime[vs.current.Primary])
+    if pInterval > deadInterval {
+      vs.next.Primary = ""
+      flag = true
+    }
+  }
+  if vs.current.Backup != "" {
+    bInterval := time.Now().Sub(vs.lastPingTime[vs.current.Backup])
+    if bInterval > deadInterval {
+      vs.next.Backup = ""
+      flag = true
+    }
+  }
+
+  if vs.next.Primary == "" && vs.next.Backup != "" {
+    vs.next.Primary = vs.next.Backup
+    vs.next.Backup = ""
+    flag = true
+  }
+
+  if flag {
+    vs.next.Viewnum = vs.current.Viewnum + 1
+  }
 }
 
 //
@@ -64,6 +128,10 @@ func StartServer(me string) *ViewServer {
   vs := new(ViewServer)
   vs.me = me
   // Your vs.* initializations here.
+  vs.current = View{Primary: "", Backup: "",  Viewnum: 0}
+  vs.next = View{Primary: "", Backup: "",  Viewnum: 0}
+  vs.lastPingTime = make(map[string]time.Time)
+  vs.ack = make(map[string]uint)
 
   // tell net/rpc about our RPC server and handlers.
   rpcs := rpc.NewServer()

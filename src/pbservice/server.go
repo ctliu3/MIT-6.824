@@ -10,8 +10,9 @@ import "os"
 import "syscall"
 import "math/rand"
 import "sync"
+//import "errors"
 
-//import "strconv"
+import "strconv"
 
 // Debugging
 const Debug = 0
@@ -31,23 +32,150 @@ type PBServer struct {
   vs *viewservice.Clerk
   done sync.WaitGroup
   finish chan interface{}
+
   // Your declarations here.
+
+  // key -> value
+  db map[string]string
+  //filter map[string]string
+  current viewservice.View
+  mu sync.Mutex
 }
 
 func (pb *PBServer) Put(args *PutArgs, reply *PutReply) error {
   // Your code here.
+
+  pb.mu.Lock()
+
+  if pb.dead {
+    reply.Err = ErrWrongServer
+    return fmt.Errorf("Server died.")
+  }
+
+  // Use the lated primary.
+  if pb.me != pb.vs.Primary() {
+    reply.Err = ErrWrongServer
+    return fmt.Errorf("I'm not a primary.")
+  }
+
+  if value, ok := pb.db[args.UUID]; ok {
+    reply.PreviousValue = value
+    reply.Err = OK
+    pb.mu.Unlock()
+    return nil
+  }
+
+  if args.DoHash {
+    reply.PreviousValue = pb.db[args.Key]
+    hcode := hash(reply.PreviousValue + args.Value)
+    args.Value = strconv.Itoa(int(hcode))
+  }
+
+  // Primary then Backup or reverse?
+  kvs := map[string]string {
+    args.Key: args.Value,
+    args.UUID: reply.PreviousValue,
+  }
+
+  for key, value := range kvs {
+    pb.db[key] = value
+  }
+
+  view, _ := pb.vs.Get()
+  backup := view.Backup
+  //backup := pb.current.Backup
+
+  if backup != "" {
+    err := pb.syncKvs(backup, kvs)
+    if err != nil {
+      reply.Err = ErrWrongServer
+      pb.mu.Unlock()
+      return fmt.Errorf("Sync to backup error.")
+    }
+  }
+
+  reply.Err = OK
+  pb.mu.Unlock()
+
   return nil
 }
 
 func (pb *PBServer) Get(args *GetArgs, reply *GetReply) error {
   // Your code here.
+
+  pb.mu.Lock()
+
+  if pb.vs.Primary() != pb.me {
+    reply.Err = ErrWrongServer
+    pb.mu.Unlock()
+    return fmt.Errorf("Not connect to primary server.")
+  }
+
+  reply.Value = pb.db[args.Key]
+  reply.Err = OK
+
+  pb.mu.Unlock()
+
   return nil
 }
 
+func (pb *PBServer) syncKvs(server string, kvs map[string]string) error {
+  if server == "" {
+    return nil
+  }
+
+  args := &ForwardArgs{Kvs: kvs}
+  var reply ForwardReply
+
+  ok := call(server, "PBServer.ForwardDB", args, &reply)
+  if ok == false {
+    return fmt.Errorf("Error when synchronizing backup %s\n", server)
+  }
+  return nil
+}
+
+func (pb *PBServer) ForwardDB(args *ForwardArgs, reply *ForwardReply) error {
+
+  pb.mu.Lock()
+
+  view, _ := pb.vs.Get()
+  if view.Backup != pb.me {
+    reply.Err = ErrWrongServer
+    pb.mu.Unlock()
+    return fmt.Errorf("Not backup.")
+  }
+
+  for key, value := range args.Kvs {
+    pb.db[key] = value
+  }
+  reply.Err = OK
+
+  pb.mu.Unlock()
+
+  return nil
+}
 
 // ping the viewserver periodically.
 func (pb *PBServer) tick() {
   // Your code here.
+
+  view, _ := pb.vs.Ping(pb.current.Viewnum)
+
+  sync := false
+  if view.Primary == pb.me {
+    if view.Backup != "" && view.Backup != pb.current.Backup {
+      sync = true
+    }
+  }
+
+  pb.mu.Lock()
+
+  pb.current = view
+  if sync {
+    pb.syncKvs(view.Backup, pb.db)
+  }
+
+  pb.mu.Unlock()
 }
 
 
@@ -65,6 +193,9 @@ func StartServer(vshost string, me string) *PBServer {
   pb.vs = viewservice.MakeClerk(me, vshost)
   pb.finish = make(chan interface{})
   // Your pb.* initializations here.
+  pb.current = viewservice.View{Viewnum: 0}
+  pb.db = make(map[string]string)
+  //pb.filter = make(map[string]string)
 
   rpcs := rpc.NewServer()
   rpcs.Register(pb)

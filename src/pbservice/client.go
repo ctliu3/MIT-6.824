@@ -2,18 +2,17 @@ package pbservice
 
 import "viewservice"
 import "net/rpc"
-import "fmt"
+import "strconv"
+//import "fmt"
 
 // You'll probably need to uncomment these:
-// import "time"
-// import "crypto/rand"
-// import "math/big"
-
-
+import "time"
 
 type Clerk struct {
   vs *viewservice.Clerk
   // Your declarations here
+  me string
+  //current viewservice.View
 }
 
 
@@ -21,6 +20,7 @@ func MakeClerk(vshost string, me string) *Clerk {
   ck := new(Clerk)
   ck.vs = viewservice.MakeClerk(me, vshost)
   // Your ck.* initializations here
+  ck.me = "client: " + strconv.Itoa(int(nrand()))
 
   return ck
 }
@@ -55,7 +55,7 @@ func call(srv string, rpcname string,
     return true
   }
 
-  fmt.Println(err)
+  //fmt.Println(err)
   return false
 }
 
@@ -69,8 +69,28 @@ func call(srv string, rpcname string,
 func (ck *Clerk) Get(key string) string {
 
   // Your code here.
+  suuid := strconv.Itoa(int(nrand()))
+  args := &GetArgs{Key: key, UUID: suuid, Me: ck.me}
+  var reply GetReply
 
-  return "???"
+  for {
+    var primary string = ck.vs.Primary()
+
+    if primary == "" {
+      time.Sleep(viewservice.PingInterval)
+      continue
+    }
+
+    ok := call(primary, "PBServer.Get", args, &reply)
+    if ok == true {
+      if reply.Err == OK {
+        break
+      }
+    }
+    time.Sleep(viewservice.PingInterval)
+  }
+
+  return reply.Value
 }
 
 //
@@ -80,7 +100,29 @@ func (ck *Clerk) Get(key string) string {
 func (ck *Clerk) PutExt(key string, value string, dohash bool) string {
 
   // Your code here.
-  return "???"
+
+  suuid := strconv.Itoa(int(nrand()))
+  args := &PutArgs{Key: key, Value: value, DoHash: dohash, Me: ck.me, UUID: suuid}
+  var reply PutReply
+
+  for {
+    var primary string = ck.vs.Primary()
+
+    if primary == "" {
+      time.Sleep(viewservice.PingInterval)
+      continue
+    }
+
+    ok := call(primary, "PBServer.Put", args, &reply)
+    if ok == true {
+      if reply.Err == OK {
+        break
+      }
+    }
+    time.Sleep(viewservice.PingInterval)
+  }
+
+  return reply.PreviousValue
 }
 
 func (ck *Clerk) Put(key string, value string) {
@@ -90,3 +132,4 @@ func (ck *Clerk) PutHash(key string, value string) string {
   v := ck.PutExt(key, value, true)
   return v
 }
+
