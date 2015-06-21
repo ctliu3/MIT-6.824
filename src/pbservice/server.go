@@ -52,7 +52,7 @@ func (pb *PBServer) Put(args *PutArgs, reply *PutReply) error {
     return fmt.Errorf("Server died.")
   }
 
-  // Use the lated primary.
+  // Use the latest primary.
   if pb.me != pb.vs.Primary() {
     reply.Err = ErrWrongServer
     return fmt.Errorf("I'm not a primary.")
