@@ -1,5 +1,8 @@
 api.key
-/stuff
+
 *.swp
 *.tar.gz
+
+/pkg
+/wiki
 src/main/tags
